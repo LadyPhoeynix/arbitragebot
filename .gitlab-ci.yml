@@ -1,0 +1,66 @@
+image: docker:latest
+services:
+- docker:dind
+
+variables:
+  DOCKER_DRIVER: overlay
+  CI_VERSION: '7.6.$CI_PIPELINE_IID'
+
+stages:
+- build
+- package
+- trigger
+
+build:
+  image: openjdk:11.0.4-jdk-slim-buster
+  stage: build
+  before_script:
+  - export GRADLE_USER_HOME=`pwd`/.gradle
+  cache:
+    paths:
+    - .gradle/wrapper
+    - .gradle/caches
+  script:
+  - ./gradlew assemble
+  artifacts:
+    expire_in: 1 week
+    paths:
+    - jb-api/build/libs/JuniperBot-API.jar
+    - jb-worker/build/libs/JuniperBot-Worker.jar
+
+package-worker:
+  stage: package
+  script:
+  - cd jb-worker
+  - docker build -t registry.gitlab.com/juniperbot/backend:worker-$CI_COMMIT_REF_NAME -t registry.gitlab.com/juniperbot/backend:worker-$CI_VERSION .
+  - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN registry.gitlab.com
+  - docker push registry.gitlab.com/juniperbot/backend:worker-$CI_COMMIT_REF_NAME
+  - docker push registry.gitlab.com/juniperbot/backend:worker-$CI_VERSION
+  dependencies:
+  - build
+  only:
+  - master
+  - develop
+
+package-api:
+  stage: package
+  script:
+  - cd jb-api
+  - docker build -t registry.gitlab.com/juniperbot/backend:api-$CI_COMMIT_REF_NAME -t registry.gitlab.com/juniperbot/backend:api-$CI_VERSION .
+  - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN registry.gitlab.com
+  - docker push registry.gitlab.com/juniperbot/backend:api-$CI_COMMIT_REF_NAME
+  - docker push registry.gitlab.com/juniperbot/backend:api-$CI_VERSION
+  dependencies:
+  - build
+  only:
+  - master
+  - develop
+
+trigger-deploy:
+  stage: trigger
+  script:
+  - apk add --update curl && rm -rf /var/cache/apk/*
+  - curl --request POST --form "token=$CI_JOB_TOKEN" --form "ref=$CI_COMMIT_REF_NAME" https://gitlab.com/api/v4/projects/$INFRASTRUCTURE_PROJECT_ID/trigger/pipeline
+  only:
+  - master
+  - develop
